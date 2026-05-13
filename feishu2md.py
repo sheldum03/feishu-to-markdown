@@ -164,7 +164,45 @@ def convert_via_ssr(url, output_path=None):
 #  模式二：API 模式（需凭证）
 # ══════════════════════════════════════════════════════
 
+# 运行时由 _set_api_base() 设置，默认飞书公有云
 BASE = "https://open.feishu.cn/open-apis"
+
+
+def _detect_api_base(url):
+    """从文档 URL 推断 API 基址。
+
+    标准飞书/Lark → open.feishu.cn / open.larksuite.com
+    私有化部署    → 同域名 + /open-apis
+    """
+    parsed = urllib.parse.urlparse(url)
+    host = parsed.hostname or ""
+    if host.endswith(".feishu.cn") or host == "feishu.cn":
+        return "https://open.feishu.cn/open-apis"
+    if host.endswith(".larksuite.com") or host == "larksuite.com":
+        return "https://open.larksuite.com/open-apis"
+    # 私有化部署
+    scheme = parsed.scheme or "https"
+    return f"{scheme}://{host}/open-apis"
+
+
+def _detect_domain_key(url):
+    """从文档 URL 提取域名标识，用于按域名查找凭证。"""
+    parsed = urllib.parse.urlparse(url)
+    host = parsed.hostname or ""
+    if host.endswith(".feishu.cn"):
+        return "feishu"
+    if host.endswith(".larksuite.com"):
+        return "lark"
+    # 私有化：去掉租户子域名前缀，取主域名
+    parts = host.split(".")
+    return ".".join(parts[-3:]) if len(parts) >= 3 else host
+
+
+def _set_api_base(url):
+    """根据文档 URL 设置全局 API 基址，返回域名标识。"""
+    global BASE
+    BASE = _detect_api_base(url)
+    return _detect_domain_key(url)
 
 
 def api_request(method, path, token=None, data=None, params=None):
@@ -184,7 +222,18 @@ def api_request(method, path, token=None, data=None, params=None):
         raise RuntimeError(f"API 请求失败 [{e.code}]: {err_body}")
 
 
-def load_config():
+def load_config(domain_key=None):
+    """加载凭证。优先级：环境变量 > 按域名配置 > 默认配置。
+
+    ~/.feishu_config 支持 domains 字段存放私有化部署凭证：
+    {
+      "app_id": "默认",
+      "app_secret": "默认",
+      "domains": {
+        "xfchat.iflytek.com": {"app_id": "xxx", "app_secret": "xxx"}
+      }
+    }
+    """
     app_id = os.environ.get("FEISHU_APP_ID", "")
     app_secret = os.environ.get("FEISHU_APP_SECRET", "")
     if app_id and app_secret:
@@ -193,7 +242,11 @@ def load_config():
     if os.path.exists(config_path):
         with open(config_path, encoding="utf-8") as f:
             cfg = json.load(f)
-            return cfg.get("app_id", ""), cfg.get("app_secret", "")
+        # 私有化部署：只用域名专属凭证，不回退到默认
+        if domain_key and domain_key not in ("feishu", "lark"):
+            dcfg = cfg.get("domains", {}).get(domain_key, {})
+            return dcfg.get("app_id", ""), dcfg.get("app_secret", "")
+        return cfg.get("app_id", ""), cfg.get("app_secret", "")
     return "", ""
 
 
@@ -380,8 +433,11 @@ def convert_blocks(blocks, title=""):
 
 
 def convert_via_api(url, output_path=None):
-    """API 模式：需要飞书凭证。"""
-    app_id, app_secret = load_config()
+    """API 模式：需要飞书凭证。自动检测私有化部署域名。"""
+    domain_key = _set_api_base(url)
+    print(f"API 基址: {BASE}")
+
+    app_id, app_secret = load_config(domain_key)
     if not app_id or not app_secret:
         print("错误: API 模式需要凭证。请创建 ~/.feishu_config 或设置环境变量。")
         sys.exit(1)
@@ -511,13 +567,23 @@ def setup_via_qr(domain="feishu"):
 #  主流程
 # ══════════════════════════════════════════════════════
 
-def _ensure_credentials(domain):
-    """确保凭证可用，无凭证时自动触发扫码配置。"""
-    app_id, app_secret = load_config()
-    if not app_id or not app_secret:
-        print("未找到凭证，启动扫码配置...\n")
-        setup_via_qr(domain)
-        print()
+def _ensure_credentials(domain, domain_key=None):
+    """确保凭证可用，无凭证时自动触发扫码配置。
+
+    私有化部署不支持 Device Flow 扫码，需手动配置。
+    """
+    app_id, app_secret = load_config(domain_key)
+    if app_id and app_secret:
+        return
+    is_private = domain_key and domain_key not in ("feishu", "lark")
+    if is_private:
+        print(f"错误: 私有化部署 ({domain_key}) 需要手动配置凭证。")
+        print(f"请在 ~/.feishu_config 中添加:")
+        print(f'  {{"domains": {{"{domain_key}": {{"app_id": "xxx", "app_secret": "xxx"}}}}}}')
+        sys.exit(1)
+    print("未找到凭证，启动扫码配置...\n")
+    setup_via_qr(domain)
+    print()
 
 
 def main():
@@ -556,22 +622,24 @@ def main():
 
         output_path = args[1] if len(args) > 1 else None
 
+        # 从 URL 预检测域名信息
+        domain_key = _detect_domain_key(url)
+        if domain_key not in ("feishu", "lark"):
+            domain = domain_key  # 私有化部署
+
         # --api: 强制 API 模式
         if use_api:
-            _ensure_credentials(domain)
+            _ensure_credentials(domain, domain_key)
             convert_via_api(url, output_path)
             return
 
         # 默认: SSR → API 自动降级
         try:
             convert_via_ssr(url, output_path)
-        except RuntimeError as e:
-            if "需要登录" in str(e) or "未找到文档数据" in str(e):
-                print(f"\n免凭证模式失败（{e}），自动切换 API 模式...\n")
-                _ensure_credentials(domain)
-                convert_via_api(url, output_path)
-            else:
-                raise
+        except (RuntimeError, urllib.error.HTTPError, urllib.error.URLError) as e:
+            print(f"\n免凭证模式失败（{e}），自动切换 API 模式...\n")
+            _ensure_credentials(domain, domain_key)
+            convert_via_api(url, output_path)
     except Exception as e:
         print(f"错误: {e}", file=sys.stderr)
         sys.exit(1)
