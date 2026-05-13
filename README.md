@@ -1,6 +1,6 @@
 # feishu-to-markdown
 
-飞书文档转 Markdown，单文件，零依赖，自动降级。
+飞书文档转 Markdown，单文件，零依赖，自动降级。支持公有云和私有化部署。
 
 ## 快速开始
 
@@ -16,8 +16,8 @@ python3 feishu2md.py https://xxx.feishu.cn/wiki/abc123
 
 ```
 SSR 免凭证抓取（公开文档）
-  ↓ 失败
-扫码配置（自动创建飞书应用，获取凭证）
+  ↓ 失败（需登录 / 403）
+检查凭证 → 无凭证？ → 飞书扫码配置 / 私有化部署交互输入
   ↓
 API 模式转换（私有文档）
 ```
@@ -25,7 +25,8 @@ API 模式转换（私有文档）
 | 模式 | 适用场景 | 依赖 |
 |------|---------|------|
 | SSR | 公开文档 | 无 |
-| 扫码配置 | 首次使用私有文档 | 飞书账号 |
+| 扫码配置 | 飞书/Lark 首次使用 | 飞书账号 |
+| 交互输入 | 私有化部署首次使用 | app_id + app_secret |
 | API | 私有文档 | `~/.feishu_config` |
 
 ## 用法
@@ -47,9 +48,13 @@ python3 feishu2md.py --setup
 python3 feishu2md.py --setup --lark
 ```
 
-支持链接类型：`/docx/`、`/wiki/`、`/docs/`，含 `feishu.cn` 和 `larksuite.com`。
+支持链接类型：`/docx/`、`/wiki/`、`/docs/`。
+
+支持域名：`feishu.cn`、`larksuite.com`、任意私有化部署域名。
 
 ## 凭证配置
+
+### 飞书 / Lark 公有云
 
 三种方式（按优先级）：
 
@@ -78,6 +83,30 @@ export FEISHU_APP_SECRET=xxx
 }
 ```
 
+### 私有化部署
+
+首次访问私有化部署链接时，工具会自动提示输入 `app_id` 和 `app_secret`，输入后自动保存，下次无需重复。
+
+凭证按域名隔离存储：
+
+```json
+// ~/.feishu_config
+{
+  "app_id": "飞书公有云凭证",
+  "app_secret": "...",
+  "domains": {
+    "xfchat.iflytek.com": {
+      "app_id": "讯飞私有化凭证",
+      "app_secret": "..."
+    },
+    "other.company.com": {
+      "app_id": "其他部署凭证",
+      "app_secret": "..."
+    }
+  }
+}
+```
+
 ## 支持的文档元素
 
 - 标题（1-9级）、段落、引用、分割线
@@ -98,6 +127,7 @@ export FEISHU_APP_SECRET=xxx
 - SSR 模式通过 Googlebot UA 获取服务端渲染页面，解析嵌入的 `block_map` JSON
 - API 模式通过飞书开放平台 DocX API 获取完整 Block 结构
 - 扫码配置基于 Device Flow OAuth（逆向自 `@larksuite/openclaw-lark-tools`）
+- 私有化部署自动从文档 URL 推断 API 基址（同域名 + `/open-apis`）
 
 ## License
 
