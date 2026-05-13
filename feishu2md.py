@@ -567,20 +567,42 @@ def setup_via_qr(domain="feishu"):
 #  主流程
 # ══════════════════════════════════════════════════════
 
-def _ensure_credentials(domain, domain_key=None):
-    """确保凭证可用，无凭证时自动触发扫码配置。
+def _prompt_private_credentials(domain_key):
+    """交互式输入私有化部署凭证并保存到 ~/.feishu_config。"""
+    print(f"私有化部署 ({domain_key}) 需要凭证，请输入：")
+    app_id = input("  app_id: ").strip()
+    app_secret = input("  app_secret: ").strip()
+    if not app_id or not app_secret:
+        print("错误: app_id 和 app_secret 不能为空。", file=sys.stderr)
+        sys.exit(1)
 
-    私有化部署不支持 Device Flow 扫码，需手动配置。
+    # 读取已有配置，合并写入
+    cfg = {}
+    if os.path.exists(_CONFIG_PATH):
+        with open(_CONFIG_PATH, encoding="utf-8") as f:
+            cfg = json.load(f)
+    cfg.setdefault("domains", {})[domain_key] = {
+        "app_id": app_id,
+        "app_secret": app_secret,
+    }
+    with open(_CONFIG_PATH, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, indent=2, ensure_ascii=False)
+    print(f"凭证已保存到 {_CONFIG_PATH}\n")
+
+
+def _ensure_credentials(domain, domain_key=None):
+    """确保凭证可用。
+
+    标准飞书/Lark：无凭证时触发扫码配置。
+    私有化部署：无凭证时交互式输入并保存。
     """
     app_id, app_secret = load_config(domain_key)
     if app_id and app_secret:
         return
     is_private = domain_key and domain_key not in ("feishu", "lark")
     if is_private:
-        print(f"错误: 私有化部署 ({domain_key}) 需要手动配置凭证。")
-        print(f"请在 ~/.feishu_config 中添加:")
-        print(f'  {{"domains": {{"{domain_key}": {{"app_id": "xxx", "app_secret": "xxx"}}}}}}')
-        sys.exit(1)
+        _prompt_private_credentials(domain_key)
+        return
     print("未找到凭证，启动扫码配置...\n")
     setup_via_qr(domain)
     print()
